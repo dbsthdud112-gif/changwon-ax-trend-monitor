@@ -78,15 +78,16 @@
     <textarea id="csvText" placeholder="date,title,url&#10;2026-01-06,기사 제목,https://..."></textarea>
     <div class="controls">
       <button type="button" id="readText">붙여 넣은 내용 읽기</button>
+      <button type="button" id="loadSample">예시 불러오기</button>
       <label class="hint">또는 CSV 파일 고르기 <input type="file" id="csvFile" accept=".csv,text/csv"></label>
     </div>
     <div id="inputResult" class="hint">아직 읽은 기사가 없습니다.</div>
   </section>
 
-  <!-- ② 분류 (이슈 #2) -->
+  <!-- ② 분류 -->
   <section id="classify">
     <h2>분류</h2>
-    <p class="placeholder">이슈 #2에서 구현</p>
+    <div id="classifyResult" class="hint">아직 분류한 기사가 없습니다.</div>
   </section>
 
   <!-- ③ 표·그래프·내보내기 (이슈 #3) -->
@@ -96,6 +97,8 @@
   </section>
 </main>
 
+<script src="dictionary.js"></script>
+<script src="sample.js"></script>
 <script>
 // ===== ① 입력: CSV 읽기 =====
 
@@ -200,17 +203,88 @@ function showInputResult(result) {
   }
 }
 
-// 읽은 기사 목록. 이슈 #2(분류)와 #3(화면)이 이어서 쓴다.
+// ===== ② 분류: 분류 사전(dictionary.js) 적용 =====
+
+// 키워드가 제목에 있는지 본다. 영문으로 시작·끝나는 키워드는 그 쪽 옆에 다른 영문 글자가 없을 때만 걸린다.
+function hasKeyword(title, keyword) {
+  const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const before = /^[A-Za-z]/.test(keyword) ? '(?<![A-Za-z])' : '';
+  const after = /[A-Za-z]$/.test(keyword) ? '(?![A-Za-z])' : '';
+  return new RegExp(before + escaped + after, 'i').test(title);
+}
+
+const matches = (title, group) => group.keywords.some(k => hasKeyword(title, k));
+
+// 기사 한 건을 기획안의 "넘길결과" 모양으로 만든다.
+function classifyArticle(article, dict) {
+  const field = dict.fields.find(f => matches(article.title, f));
+  return {
+    date: article.date,
+    title: article.title,
+    url: article.url,
+    field: field ? field.name : '',
+    issues: dict.issues.filter(i => matches(article.title, i)).map(i => i.name),
+    changwon: article.title.includes(dict.region),
+  };
+}
+
+// 분류 결과를 간단한 숫자로 보여 준다. 그래프와 목록은 이슈 #3에서 만든다.
+function showClassifyResult(items, dict) {
+  const box = document.getElementById('classifyResult');
+  box.className = '';
+  box.textContent = '';
+  if (items.length === 0) {
+    box.className = 'hint';
+    box.textContent = '아직 분류한 기사가 없습니다.';
+    return;
+  }
+
+  const unclassified = items.filter(a => !a.field).length;
+  const noRegion = items.filter(a => !a.changwon).length;
+
+  const summary = document.createElement('p');
+  summary.className = 'summary';
+  summary.textContent = `총 ${items.length}건 = 분류됨 ${items.length - unclassified} + 미분류 ${unclassified}`;
+  box.appendChild(summary);
+
+  const addList = (heading, rows) => {
+    const p = document.createElement('p');
+    p.textContent = heading;
+    const ul = document.createElement('ul');
+    for (const [name, count] of rows) {
+      const li = document.createElement('li');
+      li.textContent = `${name}: ${count}건`;
+      ul.appendChild(li);
+    }
+    box.append(p, ul);
+  };
+  addList('분야별 (첫 일치 하나)', dict.fields.map(f => [f.name, items.filter(a => a.field === f.name).length]));
+  addList('쟁점별 (걸리는 것 모두)', dict.issues.map(i => [i.name, items.filter(a => a.issues.includes(i.name)).length]));
+
+  const region = document.createElement('p');
+  region.textContent = `제목에 "${dict.region}"이 없는 기사: ${noRegion}건`;
+  box.appendChild(region);
+}
+
+// 읽은 기사 목록과 분류한 결과. 이슈 #3(화면)이 이어서 쓴다.
 let articles = [];
+let classified = [];
 
 function handleText(text) {
   const result = readArticles(text);
   articles = result.articles || [];
   showInputResult(result);
+  classified = articles.map(a => classifyArticle(a, DICTIONARY));
+  showClassifyResult(classified, DICTIONARY);
 }
 
 document.getElementById('readText').addEventListener('click', () => {
   handleText(document.getElementById('csvText').value);
+});
+
+document.getElementById('loadSample').addEventListener('click', () => {
+  document.getElementById('csvText').value = SAMPLE_CSV;
+  handleText(SAMPLE_CSV);
 });
 
 document.getElementById('csvFile').addEventListener('change', e => {
