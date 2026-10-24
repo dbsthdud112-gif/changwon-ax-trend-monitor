@@ -2,6 +2,12 @@
 
 **배포 주소: https://dbsthdud112-gif.github.io/changwon-ax-trend-monitor/**
 
+## 설명영상
+
+https://github.com/user-attachments/assets/2d77c6f9-d8f7-42ad-ab7c-95fa6decf3ed
+
+
+
 창원 산업단지의 제조 AX · 지원사업 · 스타트업 관련 기사 목록을 넣으면, 분류 사전(분야 · 쟁점)으로 나눠 분야별 개수 · 월별 추이 · 쟁점별 목록과 분류 안 된 기사를 보여 주는 웹 도구.
 
 신흥기술영향평가세미나(2026-2) 연구도구 ① "정책·기술 동향 모니터" 과제. 교수님 공표에 따라 혼자 진행.
