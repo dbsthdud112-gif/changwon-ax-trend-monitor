@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>창원 산업단지 AX 동향 모니터</title>
+<style>
+  :root {
+    --bg: #f7f7f5;
+    --panel: #ffffff;
+    --text: #1f2328;
+    --muted: #656d76;
+    --line: #d8dee4;
+    --accent: #0969da;
+    --warn-bg: #fff8c5;
+    --warn-line: #d4a72c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px 16px 48px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+    line-height: 1.5;
+  }
+  main { max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  h2 { font-size: 1.1rem; margin: 0 0 12px; }
+  .lead { color: var(--muted); margin: 0 0 24px; }
+  section {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  textarea {
+    width: 100%;
+    min-height: 160px;
+    padding: 8px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    font: 0.9rem/1.4 ui-monospace, Consolas, monospace;
+  }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+  button {
+    padding: 6px 14px;
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    background: var(--accent);
+    color: #fff;
+    font: inherit;
+    cursor: pointer;
+  }
+  .hint { color: var(--muted); font-size: 0.9rem; }
+  .summary { margin: 0; font-weight: 600; }
+  .error { color: #cf222e; font-weight: 600; }
+  .skipped {
+    margin-top: 12px;
+    padding: 8px 12px;
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-line);
+    border-radius: 6px;
+  }
+  .skipped ul { margin: 4px 0 0; padding-left: 20px; }
+  .placeholder { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>창원 산업단지 AX 동향 모니터</h1>
+  <p class="lead">기사 목록(date,title,url)을 넣으면 분야·쟁점으로 나눠 개수·추이·목록을 보여 줍니다.</p>
+
+  <!-- ① 입력 -->
+  <section id="input">
+    <h2>기사 목록 넣기</h2>
+    <textarea id="csvText" placeholder="date,title,url&#10;2026-01-06,기사 제목,https://..."></textarea>
+    <div class="controls">
+      <button type="button" id="readText">붙여 넣은 내용 읽기</button>
+      <label class="hint">또는 CSV 파일 고르기 <input type="file" id="csvFile" accept=".csv,text/csv"></label>
+    </div>
+    <div id="inputResult" class="hint">아직 읽은 기사가 없습니다.</div>
+  </section>
+
+  <!-- ② 분류 (이슈 #2) -->
+  <section id="classify">
+    <h2>분류</h2>
+    <p class="placeholder">이슈 #2에서 구현</p>
+  </section>
+
+  <!-- ③ 표·그래프·내보내기 (이슈 #3) -->
+  <section id="output">
+    <h2>결과</h2>
+    <p class="placeholder">이슈 #3에서 구현</p>
+  </section>
+</main>
+
+<script>
+// ===== ① 입력: CSV 읽기 =====
+
+// CSV 글자를 줄 단위 칸 목록으로 나눈다. 따옴표로 묶인 칸(쉼표·줄바꿈 포함)도 읽는다.
+// 각 줄에는 파일에서 시작한 줄 번호(1부터)를 붙인다.
+function parseCsv(text) {
+  text = text.replace(/^﻿/, ''); // 파일 맨 앞 BOM 제거
+  const rows = [];
+  let row = [], field = '', inQuotes = false;
+  let line = 1, rowLine = 1;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else {
+        if (ch === '\n') line++;
+        field += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ',') {
+      row.push(field); field = '';
+    } else if (ch === '\r') {
+      // \r\n 의 \r 은 무시
+    } else if (ch === '\n') {
+      row.push(field);
+      rows.push({ line: rowLine, cells: row });
+      row = []; field = '';
+      line++; rowLine = line;
+    } else {
+      field += ch;
+    }
+  }
+  if (field !== '' || row.length > 0) {
+    row.push(field);
+    rows.push({ line: rowLine, cells: row });
+  }
+  return rows;
+}
+
+// 칸 목록을 기사 목록으로 바꾼다. 빈 줄, 날짜·제목이 빠진 줄은 건너뛰고 줄 번호를 남긴다.
+function readArticles(text) {
+  const rows = parseCsv(text);
+  const isBlank = r => r.cells.every(c => c.trim() === '');
+
+  const headerIndex = rows.findIndex(r => !isBlank(r));
+  if (headerIndex === -1) return { error: '내용이 없습니다.' };
+
+  const header = rows[headerIndex].cells.map(c => c.trim().toLowerCase());
+  const col = { date: header.indexOf('date'), title: header.indexOf('title'), url: header.indexOf('url') };
+  if (col.date === -1 || col.title === -1) {
+    return { error: '첫 줄에 date,title,url 열 이름이 있어야 합니다.' };
+  }
+
+  const articles = [];
+  const skipped = [];
+  for (const r of rows.slice(headerIndex + 1)) {
+    if (isBlank(r)) { skipped.push({ line: r.line, reason: '빈 줄' }); continue; }
+    const date = (r.cells[col.date] || '').trim();
+    const title = (r.cells[col.title] || '').trim();
+    const url = col.url === -1 ? '' : (r.cells[col.url] || '').trim();
+    if (!date) { skipped.push({ line: r.line, reason: '날짜 없음' }); continue; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { skipped.push({ line: r.line, reason: '날짜 형식이 YYYY-MM-DD가 아님' }); continue; }
+    if (!title) { skipped.push({ line: r.line, reason: '제목 없음' }); continue; }
+    articles.push({ date, title, url });
+  }
+  return { articles, skipped };
+}
+
+// 읽은 결과를 화면에 보여 준다.
+function showInputResult(result) {
+  const box = document.getElementById('inputResult');
+  box.className = '';
+  box.textContent = '';
+
+  if (result.error) {
+    box.className = 'error';
+    box.textContent = result.error;
+    return;
+  }
+
+  const summary = document.createElement('p');
+  summary.className = 'summary';
+  summary.textContent = `읽은 기사 ${result.articles.length}건 · 건너뛴 줄 ${result.skipped.length}개`;
+  box.appendChild(summary);
+
+  if (result.skipped.length > 0) {
+    const warn = document.createElement('div');
+    warn.className = 'skipped';
+    warn.textContent = '건너뛴 줄:';
+    const list = document.createElement('ul');
+    for (const s of result.skipped) {
+      const li = document.createElement('li');
+      li.textContent = `${s.line}번째 줄 — ${s.reason}`;
+      list.appendChild(li);
+    }
+    warn.appendChild(list);
+    box.appendChild(warn);
+  }
+}
+
+// 읽은 기사 목록. 이슈 #2(분류)와 #3(화면)이 이어서 쓴다.
+let articles = [];
+
+function handleText(text) {
+  const result = readArticles(text);
+  articles = result.articles || [];
+  showInputResult(result);
+}
+
+document.getElementById('readText').addEventListener('click', () => {
+  handleText(document.getElementById('csvText').value);
+});
+
+document.getElementById('csvFile').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    document.getElementById('csvText').value = reader.result;
+    handleText(reader.result);
+  };
+  reader.readAsText(file, 'utf-8');
+});
+</script>
+</body>
+</html>
