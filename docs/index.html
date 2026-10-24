@@ -65,6 +65,44 @@
   }
   .skipped ul { margin: 4px 0 0; padding-left: 20px; }
   .placeholder { color: var(--muted); }
+
+  /* ③ 결과: 그래프·목록 */
+  .viz-root {
+    --surface-1: #ffffff;
+    --text-primary: #1f2328;
+    --text-secondary: #52514e;
+    --grid: #e6e6e3;
+    --series-1: #2a78d6;
+  }
+  .check { margin: 0 0 16px; padding: 8px 12px; border-radius: 6px; background: #f0f6ff; font-weight: 600; }
+  .check.bad { background: #ffebe9; color: #cf222e; }
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 16px; }
+  .chart h3, #output h3 { font-size: 1rem; margin: 0 0 8px; }
+  .bar-row { display: grid; grid-template-columns: 8.5em 1fr 2.5em; gap: 8px; align-items: center; margin: 6px 0; font-size: 0.9rem; }
+  .bar-track { height: 16px; }
+  .bar { height: 100%; background: var(--series-1); border-radius: 0 4px 4px 0; }
+  .bar-row:hover .bar { filter: brightness(1.15); }
+  .bar-value { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+  .line-wrap { position: relative; }
+  .line-wrap svg { width: 100%; height: auto; display: block; }
+  .line-wrap text { fill: var(--text-secondary); font-size: 11px; }
+  .tooltip {
+    position: absolute; pointer-events: none; padding: 4px 8px; border-radius: 4px;
+    background: var(--text-primary); color: #fff; font-size: 0.85rem; white-space: nowrap;
+  }
+  .tooltip[hidden] { display: none; }
+  .filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+  .filters button { background: #fff; color: var(--accent); }
+  .filters button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+  .filters input { padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+  td.date { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .list-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin: 16px 0 8px; }
+  .list-head h3 { margin: 0; }
+  details { margin-top: 8px; font-size: 0.9rem; }
 </style>
 </head>
 <body>
@@ -90,10 +128,44 @@
     <div id="classifyResult" class="hint">아직 분류한 기사가 없습니다.</div>
   </section>
 
-  <!-- ③ 표·그래프·내보내기 (이슈 #3) -->
-  <section id="output">
+  <!-- ③ 표·그래프·내보내기 -->
+  <section id="output" class="viz-root">
     <h2>결과</h2>
-    <p class="placeholder">이슈 #3에서 구현</p>
+    <p id="outputEmpty" class="hint">기사를 넣으면 그래프와 목록이 나옵니다.</p>
+    <div id="outputBody" hidden>
+      <p id="checkLine" class="check"></p>
+      <p id="regionNote" class="skipped" hidden></p>
+
+      <div class="charts">
+        <div class="chart">
+          <h3>분야별 개수</h3>
+          <div id="fieldBars"></div>
+        </div>
+        <div class="chart">
+          <h3>월별 추이 (전체 기사 수)</h3>
+          <div class="line-wrap" id="lineWrap">
+            <div class="tooltip" id="lineTip" hidden></div>
+          </div>
+          <details>
+            <summary>표로 보기</summary>
+            <table id="monthTable"></table>
+          </details>
+        </div>
+      </div>
+
+      <div class="list-head">
+        <h3>쟁점별 목록 <span id="listCount" class="hint"></span></h3>
+        <button type="button" id="exportCsv">CSV 내보내기</button>
+      </div>
+      <div class="filters" id="issueFilters"></div>
+      <div class="filters">
+        <label class="hint">제목 검색 <input type="search" id="titleSearch"></label>
+      </div>
+      <div class="table-wrap"><table id="articleTable"></table></div>
+
+      <div class="list-head"><h3>미분류 목록 <span class="hint">분류 사전 보강 후보</span></h3></div>
+      <div class="table-wrap"><table id="unclassifiedTable"></table></div>
+    </div>
   </section>
 </main>
 
@@ -266,7 +338,242 @@ function showClassifyResult(items, dict) {
   box.appendChild(region);
 }
 
-// 읽은 기사 목록과 분류한 결과. 이슈 #3(화면)이 이어서 쓴다.
+// ===== ③ 표·그래프·내보내기 =====
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function el(tag, text, className) {
+  const node = document.createElement(tag);
+  if (text !== undefined) node.textContent = text;
+  if (className) node.className = className;
+  return node;
+}
+
+function svgEl(tag, attrs) {
+  const node = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+  return node;
+}
+
+// 제목 칸: http(s) 링크만 걸고, 나머지는 글자로 둔다.
+function titleCell(article) {
+  const td = el('td');
+  if (/^https?:\/\//i.test(article.url)) {
+    const a = el('a', article.title);
+    a.href = article.url;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    td.appendChild(a);
+  } else {
+    td.textContent = article.title;
+  }
+  return td;
+}
+
+function fillTable(table, headers, rows) {
+  table.textContent = '';
+  const head = el('tr');
+  for (const h of headers) head.appendChild(el('th', h));
+  table.appendChild(head);
+  for (const cells of rows) {
+    const tr = el('tr');
+    for (const c of cells) tr.appendChild(c instanceof Node ? c : el('td', c));
+    table.appendChild(tr);
+  }
+}
+
+// 점검 줄: 총 건수 = 분류됨 + 미분류, 건너뛴 줄. 합이 맞지 않으면 빨갛게 표시한다.
+function renderCheck(items, skippedCount) {
+  const unclassified = items.filter(a => !a.field).length;
+  const byField = DICTIONARY.fields.reduce((n, f) => n + items.filter(a => a.field === f.name).length, 0);
+  const ok = byField + unclassified === items.length;
+  const line = document.getElementById('checkLine');
+  line.textContent = `점검: 총 ${items.length}건 = 분류됨 ${items.length - unclassified} + 미분류 ${unclassified}` +
+    ` · 건너뛴 줄 ${skippedCount}개 · ${ok ? '합계 맞음' : '합계가 맞지 않음'}`;
+  line.className = ok ? 'check' : 'check bad';
+
+  const noRegion = items.filter(a => !a.changwon);
+  const note = document.getElementById('regionNote');
+  note.hidden = noRegion.length === 0;
+  note.textContent = '';
+  if (noRegion.length > 0) {
+    note.appendChild(el('span', `제목에 "${DICTIONARY.region}"이 없는 기사 ${noRegion.length}건 — 창원 기사인지 확인하세요:`));
+    const ul = el('ul');
+    for (const a of noRegion) ul.appendChild(el('li', `${a.date} ${a.title}`));
+    note.appendChild(ul);
+  }
+}
+
+// 분야별 막대: 분야 하나에 막대 하나, 값은 막대 옆에 바로 적는다.
+function renderFieldBars(items) {
+  const box = document.getElementById('fieldBars');
+  box.textContent = '';
+  const rows = DICTIONARY.fields.map(f => [f.name, items.filter(a => a.field === f.name).length]);
+  rows.push(['미분류', items.filter(a => !a.field).length]);
+  const max = Math.max(1, ...rows.map(r => r[1]));
+  for (const [name, count] of rows) {
+    const row = el('div', undefined, 'bar-row');
+    row.title = `${name}: ${count}건`;
+    const track = el('div', undefined, 'bar-track');
+    const bar = el('div', undefined, 'bar');
+    bar.style.width = count > 0 ? `max(2px, ${(count / max) * 100}%)` : '0';
+    if (name === '미분류') bar.style.background = 'var(--muted)';
+    track.appendChild(bar);
+    row.append(el('span', name), track, el('span', `${count}`, 'bar-value'));
+    box.appendChild(row);
+  }
+}
+
+// 첫 달부터 마지막 달까지 빈 달 없이 월별 기사 수를 센다.
+function countByMonth(items) {
+  const months = items.map(a => a.date.slice(0, 7)).sort();
+  if (months.length === 0) return [];
+  const result = [];
+  let [y, m] = months[0].split('-').map(Number);
+  const last = months[months.length - 1];
+  while (true) {
+    const key = `${y}-${String(m).padStart(2, '0')}`;
+    result.push({ month: key, count: months.filter(x => x === key).length });
+    if (key === last) break;
+    m++;
+    if (m > 12) { m = 1; y++; }
+  }
+  return result;
+}
+
+// 월별 선 그래프 (선 1개). 포인터를 올리면 가장 가까운 달의 건수를 보여 준다.
+function renderMonthLine(items) {
+  const wrap = document.getElementById('lineWrap');
+  const tip = document.getElementById('lineTip');
+  wrap.querySelectorAll('svg').forEach(s => s.remove());
+  tip.hidden = true;
+
+  const data = countByMonth(items);
+  const oneYear = data.length > 0 && data[0].month.slice(0, 4) === data[data.length - 1].month.slice(0, 4);
+  const label = d => oneYear ? `${Number(d.month.slice(5))}월` : d.month;
+
+  const W = 480, H = 200, left = 28, right = 12, top = 12, bottom = 28;
+  const maxY = Math.max(1, ...data.map(d => d.count));
+  const x = i => data.length === 1 ? (left + W - right) / 2 : left + (i * (W - left - right)) / (data.length - 1);
+  const y = v => top + (H - top - bottom) * (1 - v / maxY);
+
+  const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': '월별 기사 수 선 그래프' });
+  for (let v = 0; v <= maxY; v++) {
+    svg.appendChild(svgEl('line', { x1: left, x2: W - right, y1: y(v), y2: y(v), stroke: 'var(--grid)', 'stroke-width': 1 }));
+    const t = svgEl('text', { x: left - 6, y: y(v) + 4, 'text-anchor': 'end' });
+    t.textContent = v;
+    svg.appendChild(t);
+  }
+  data.forEach((d, i) => {
+    const t = svgEl('text', { x: x(i), y: H - 8, 'text-anchor': 'middle' });
+    t.textContent = label(d);
+    svg.appendChild(t);
+  });
+  const hair = svgEl('line', { y1: top, y2: H - bottom, stroke: 'var(--text-secondary)', 'stroke-width': 1, visibility: 'hidden' });
+  svg.appendChild(hair);
+  svg.appendChild(svgEl('polyline', {
+    points: data.map((d, i) => `${x(i)},${y(d.count)}`).join(' '),
+    fill: 'none', stroke: 'var(--series-1)', 'stroke-width': 2, 'stroke-linejoin': 'round',
+  }));
+  data.forEach((d, i) => {
+    svg.appendChild(svgEl('circle', { cx: x(i), cy: y(d.count), r: 4, fill: 'var(--series-1)', stroke: 'var(--surface-1)', 'stroke-width': 2 }));
+  });
+  wrap.insertBefore(svg, tip);
+
+  svg.addEventListener('pointermove', e => {
+    if (data.length === 0) return;
+    const box = svg.getBoundingClientRect();
+    const px = ((e.clientX - box.left) / box.width) * W;
+    let i = 0;
+    data.forEach((_, j) => { if (Math.abs(x(j) - px) < Math.abs(x(i) - px)) i = j; });
+    hair.setAttribute('x1', x(i));
+    hair.setAttribute('x2', x(i));
+    hair.setAttribute('visibility', 'visible');
+    tip.textContent = `${data[i].count}건 · ${data[i].month}`;
+    tip.hidden = false;
+    const scale = box.width / W;
+    tip.style.left = `${Math.min(x(i) * scale + 8, box.width - tip.offsetWidth)}px`;
+    const pointY = y(data[i].count) * scale;
+    tip.style.top = `${pointY < 36 ? pointY + 12 : pointY - 32}px`; // 위쪽 점은 툴팁을 아래에
+  });
+  svg.addEventListener('pointerleave', () => { tip.hidden = true; hair.setAttribute('visibility', 'hidden'); });
+
+  fillTable(document.getElementById('monthTable'), ['월', '기사 수'], data.map(d => [d.month, `${d.count}`]));
+}
+
+// 쟁점 버튼과 제목 검색으로 거른 목록. 내보내기도 이 목록을 쓴다.
+let activeIssue = '';
+
+function filteredArticles() {
+  const q = document.getElementById('titleSearch').value.trim().toLowerCase();
+  return classified.filter(a =>
+    (activeIssue === '' || a.issues.includes(activeIssue)) &&
+    (q === '' || a.title.toLowerCase().includes(q)));
+}
+
+function renderIssueFilters() {
+  const box = document.getElementById('issueFilters');
+  box.textContent = '';
+  const options = [['', '전체']].concat(DICTIONARY.issues.map(i => [i.name, i.name]));
+  for (const [value, text] of options) {
+    const count = value === '' ? classified.length : classified.filter(a => a.issues.includes(value)).length;
+    const b = el('button', `${text} ${count}`);
+    b.type = 'button';
+    b.setAttribute('aria-pressed', String(value === activeIssue));
+    b.addEventListener('click', () => { activeIssue = value; renderIssueFilters(); renderArticleList(); });
+    box.appendChild(b);
+  }
+}
+
+function renderArticleList() {
+  const list = filteredArticles();
+  document.getElementById('listCount').textContent = `${list.length}건 표시`;
+  fillTable(document.getElementById('articleTable'), ['날짜', '제목', '분야', '쟁점'],
+    list.map(a => [el('td', a.date, 'date'), titleCell(a), a.field || '미분류', a.issues.join(', ') || '—']));
+}
+
+function renderUnclassified() {
+  const list = classified.filter(a => !a.field);
+  fillTable(document.getElementById('unclassifiedTable'), ['날짜', '제목', '쟁점'],
+    list.map(a => [el('td', a.date, 'date'), titleCell(a), a.issues.join(', ') || '—']));
+}
+
+// CSV 칸 하나: 쉼표·따옴표·줄바꿈이 있으면 따옴표로 묶는다.
+const csvCell = v => /[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+
+// 지금 보이는 목록을 date,title,url,분야,쟁점 열로 만든다. 다시 넣으면 date,title,url만 읽는다.
+function toCsv(list) {
+  const lines = [['date', 'title', 'url', '분야', '쟁점']];
+  for (const a of list) lines.push([a.date, a.title, a.url, a.field || '미분류', a.issues.join('; ')]);
+  return lines.map(cells => cells.map(csvCell).join(',')).join('\r\n') + '\r\n';
+}
+
+document.getElementById('exportCsv').addEventListener('click', () => {
+  // 엑셀에서 한글이 깨지지 않도록 BOM을 붙인다.
+  const blob = new Blob(['﻿' + toCsv(filteredArticles())], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = '분류결과.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+document.getElementById('titleSearch').addEventListener('input', renderArticleList);
+
+function renderOutput(items, skippedCount) {
+  document.getElementById('outputEmpty').hidden = items.length > 0;
+  document.getElementById('outputBody').hidden = items.length === 0;
+  if (items.length === 0) return;
+  if (activeIssue && !DICTIONARY.issues.some(i => i.name === activeIssue)) activeIssue = '';
+  renderCheck(items, skippedCount);
+  renderFieldBars(items);
+  renderMonthLine(items);
+  renderIssueFilters();
+  renderArticleList();
+  renderUnclassified();
+}
+
+// 읽은 기사 목록과 분류한 결과
 let articles = [];
 let classified = [];
 
@@ -276,6 +583,7 @@ function handleText(text) {
   showInputResult(result);
   classified = articles.map(a => classifyArticle(a, DICTIONARY));
   showClassifyResult(classified, DICTIONARY);
+  renderOutput(classified, (result.skipped || []).length);
 }
 
 document.getElementById('readText').addEventListener('click', () => {
