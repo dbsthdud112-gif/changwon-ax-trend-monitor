@@ -289,12 +289,11 @@ const matches = (title, group) => group.keywords.some(k => hasKeyword(title, k))
 
 // 기사 한 건을 기획안의 "넘길결과" 모양으로 만든다.
 function classifyArticle(article, dict) {
-  const field = dict.fields.find(f => matches(article.title, f));
   return {
     date: article.date,
     title: article.title,
     url: article.url,
-    field: field ? field.name : '',
+    fields: dict.fields.filter(f => matches(article.title, f)).map(f => f.name),
     issues: dict.issues.filter(i => matches(article.title, i)).map(i => i.name),
     changwon: article.title.includes(dict.region),
   };
@@ -311,7 +310,7 @@ function showClassifyResult(items, dict) {
     return;
   }
 
-  const unclassified = items.filter(a => !a.field).length;
+  const unclassified = items.filter(a => a.fields.length === 0).length;
   const noRegion = items.filter(a => !a.changwon).length;
 
   const summary = document.createElement('p');
@@ -330,7 +329,7 @@ function showClassifyResult(items, dict) {
     }
     box.append(p, ul);
   };
-  addList('분야별 (첫 일치 하나)', dict.fields.map(f => [f.name, items.filter(a => a.field === f.name).length]));
+  addList('분야별 (걸리는 것 모두)', dict.fields.map(f => [f.name, items.filter(a => a.fields.includes(f.name)).length]));
   addList('쟁점별 (걸리는 것 모두)', dict.issues.map(i => [i.name, items.filter(a => a.issues.includes(i.name)).length]));
 
   const region = document.createElement('p');
@@ -382,13 +381,16 @@ function fillTable(table, headers, rows) {
   }
 }
 
-// 점검 줄: 총 건수 = 분류됨 + 미분류, 건너뛴 줄. 합이 맞지 않으면 빨갛게 표시한다.
+// 점검 줄: 총 건수 = 분류됨 + 미분류, 여러 분야에 걸친 기사, 건너뛴 줄.
+// 분야는 걸리는 것을 모두 세므로, 분야 막대의 합 = 기사마다 걸린 분야 수의 합이어야 한다. 다르면 빨갛게 표시한다.
 function renderCheck(items, skippedCount) {
-  const unclassified = items.filter(a => !a.field).length;
-  const byField = DICTIONARY.fields.reduce((n, f) => n + items.filter(a => a.field === f.name).length, 0);
-  const ok = byField + unclassified === items.length;
+  const unclassified = items.filter(a => a.fields.length === 0).length;
+  const multi = items.filter(a => a.fields.length > 1).length;
+  const barTotal = DICTIONARY.fields.reduce((n, f) => n + items.filter(a => a.fields.includes(f.name)).length, 0);
+  const ok = barTotal === items.reduce((n, a) => n + a.fields.length, 0);
   const line = document.getElementById('checkLine');
   line.textContent = `점검: 총 ${items.length}건 = 분류됨 ${items.length - unclassified} + 미분류 ${unclassified}` +
+    ` · 여러 분야에 걸친 기사 ${multi}건 · 분야 막대 합 ${barTotal}` +
     ` · 건너뛴 줄 ${skippedCount}개 · ${ok ? '합계 맞음' : '합계가 맞지 않음'}`;
   line.className = ok ? 'check' : 'check bad';
 
@@ -408,8 +410,8 @@ function renderCheck(items, skippedCount) {
 function renderFieldBars(items) {
   const box = document.getElementById('fieldBars');
   box.textContent = '';
-  const rows = DICTIONARY.fields.map(f => [f.name, items.filter(a => a.field === f.name).length]);
-  rows.push(['미분류', items.filter(a => !a.field).length]);
+  const rows = DICTIONARY.fields.map(f => [f.name, items.filter(a => a.fields.includes(f.name)).length]);
+  rows.push(['미분류', items.filter(a => a.fields.length === 0).length]);
   const max = Math.max(1, ...rows.map(r => r[1]));
   for (const [name, count] of rows) {
     const row = el('div', undefined, 'bar-row');
@@ -529,11 +531,11 @@ function renderArticleList() {
   const list = filteredArticles();
   document.getElementById('listCount').textContent = `${list.length}건 표시`;
   fillTable(document.getElementById('articleTable'), ['날짜', '제목', '분야', '쟁점'],
-    list.map(a => [el('td', a.date, 'date'), titleCell(a), a.field || '미분류', a.issues.join(', ') || '—']));
+    list.map(a => [el('td', a.date, 'date'), titleCell(a), a.fields.join(', ') || '미분류', a.issues.join(', ') || '—']));
 }
 
 function renderUnclassified() {
-  const list = classified.filter(a => !a.field);
+  const list = classified.filter(a => a.fields.length === 0);
   fillTable(document.getElementById('unclassifiedTable'), ['날짜', '제목', '쟁점'],
     list.map(a => [el('td', a.date, 'date'), titleCell(a), a.issues.join(', ') || '—']));
 }
@@ -544,7 +546,7 @@ const csvCell = v => /[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
 // 지금 보이는 목록을 date,title,url,분야,쟁점 열로 만든다. 다시 넣으면 date,title,url만 읽는다.
 function toCsv(list) {
   const lines = [['date', 'title', 'url', '분야', '쟁점']];
-  for (const a of list) lines.push([a.date, a.title, a.url, a.field || '미분류', a.issues.join('; ')]);
+  for (const a of list) lines.push([a.date, a.title, a.url, a.fields.join('; ') || '미분류', a.issues.join('; ')]);
   return lines.map(cells => cells.map(csvCell).join(',')).join('\r\n') + '\r\n';
 }
 
